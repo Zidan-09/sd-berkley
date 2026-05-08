@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<title>Simulador Berkeley</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<style>
+:root {
+    --bg: #0f172a;
+    --card: #1e293b;
+    --accent: #6366f1;
+    --text: #e2e8f0;
+    --muted: #94a3b8;
+}
+
+body {
+    margin: 0;
+    font-family: 'Segoe UI', sans-serif;
+    background: linear-gradient(135deg, #0f172a, #020617);
+    color: var(--text);
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: 100vh;
+}
+
+.app {
+    width: 100%;
+    max-width: 900px;
+}
+
+.card {
+    background: var(--card);
+    padding: 30px;
+    border-radius: 16px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+    animation: fade 0.4s ease;
+}
+
+@keyframes fade {
+    from {opacity:0; transform:translateY(10px);}
+    to {opacity:1;}
+}
+
+h2 {
+    margin-top: 0;
+}
+
+input {
+    width: 100%;
+    padding: 12px;
+    margin-top: 8px;
+    border-radius: 10px;
+    border: none;
+    background: #020617;
+    color: white;
+}
+
+button {
+    margin-top: 20px;
+    padding: 12px;
+    border: none;
+    border-radius: 10px;
+    background: var(--accent);
+    color: white;
+    cursor: pointer;
+    width: 100%;
+    font-size: 15px;
+}
+
+button:hover {
+    opacity: 0.9;
+}
+
+.row {
+    display: flex;
+    gap: 10px;
+}
+
+.row > div {
+    flex: 1;
+}
+
+.process {
+    background: #020617;
+    padding: 10px;
+    border-radius: 10px;
+    margin-top: 10px;
+}
+
+.badge {
+    display: inline-block;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--accent);
+    font-size: 12px;
+    margin-bottom: 8px;
+}
+
+.log {
+    background: #020617;
+    padding: 12px;
+    border-radius: 10px;
+    margin-top: 10px;
+    font-size: 14px;
+}
+
+.hidden { display:none; }
+</style>
+</head>
+
+<body>
+
+<div class="app">
+
+<!-- STEP 1 -->
+<div class="card" id="step1">
+<h2>Configuração</h2>
+
+<label>Horário do Servidor</label>
+<input type="time" id="serverTime">
+
+<label>Quantidade de Processos</label>
+<input type="number" id="numProcesses" min="1" max="10">
+
+<button onclick="createProcesses()">Continuar →</button>
+
+<div id="procInputs"></div>
+</div>
+
+<!-- STEP 2 -->
+<div class="card hidden" id="step2">
+<h2>Mensagens</h2>
+<div id="msgInputs"></div>
+<button onclick="run()">Simular →</button>
+</div>
+
+<!-- STEP 3 -->
+<div class="card hidden" id="step3">
+<h2>Resultado</h2>
+<div id="output"></div>
+<button onclick="location.reload()">Reiniciar</button>
+</div>
+
+</div>
+
+<script>
+// ===== LÓGICA (MESMA DO PYTHON) =====
+
+class Process {
+    constructor(id, t){
+        this.id=id;
+        this.real=this.parse(t);
+        this.adjust=0;
+    }
+    parse(t){ let [h,m]=t.split(":"); return (+h*60+ +m)%1440;}
+    tick(m){ this.real=(this.real+m)%1440;}
+    logical(){ return this.real+this.adjust;}
+}
+
+class System {
+    constructor(t){
+        this.server=this.parse(t);
+        this.p={};
+        this.q=[];
+    }
+    parse(t){ let [h,m]=t.split(":"); return (+h*60+ +m)%1440;}
+    fmt(m){ return `${String(Math.floor(m/60)%24).padStart(2,'0')}:${String(m%60).padStart(2,'0')}`;}
+
+    add(p){ this.p[p.id]=p;}
+
+    sync(){
+        let all=[this.server,...Object.values(this.p).map(x=>x.real)];
+        let avg=all.reduce((a,b)=>a+b,0)/all.length;
+
+        let html=`<div class="badge">Média: ${this.fmt(avg)}</div>`;
+        html+=`Servidor ajuste: ${(avg-this.server).toFixed(1)}<br>`;
+        this.server=avg;
+
+        Object.values(this.p).forEach(p=>{
+            p.adjust=avg-p.real;
+            html+=`${p.id} → Real: ${this.fmt(p.real)} | Ajuste: ${p.adjust.toFixed(1)} | Lógico: ${this.fmt(p.logical())}<br>`;
+        });
+
+        return html;
+    }
+
+    adv(m){
+        this.server=(this.server+m)%1440;
+        Object.values(this.p).forEach(p=>p.tick(m));
+    }
+
+    send(id,t){
+        let s=this.p[id];
+        let target=this.parse(t);
+        let diff=(target-s.real+1440)%1440;
+
+        this.adv(diff);
+
+        let ids=Object.keys(this.p).filter(x=>x!=id);
+        let r=ids[Math.floor(Math.random()*ids.length)];
+        let txt="Msg-"+Math.random().toString(36).slice(2,5);
+
+        this.q.push({
+            s:id,
+            r:r,
+            real:s.real,
+            log:s.logical(),
+            txt
+        });
+    }
+}
+
+// ===== UI =====
+
+let sys;
+
+function createProcesses(){
+    let t=document.getElementById("serverTime").value;
+    let n=+document.getElementById("numProcesses").value;
+
+    if(!t||!n) return alert("Preencha");
+
+    document.getElementById("serverTime").disabled=true;
+
+    let div=document.getElementById("procInputs");
+    div.innerHTML="";
+
+    for(let i=1;i<=n;i++){
+        div.innerHTML+=`
+        <div class="process">
+            P${i}
+            <input type="time" id="p${i}">
+        </div>`;
+    }
+
+    div.innerHTML+=`<button onclick="toStep2()">Avançar →</button>`;
+}
+
+function toStep2(){
+    let t=document.getElementById("serverTime").value;
+    sys=new System(t);
+
+    document.querySelectorAll("#procInputs input").forEach((inp,i)=>{
+        sys.add(new Process("P"+(i+1),inp.value));
+    });
+
+    document.getElementById("step1").classList.add("hidden");
+    document.getElementById("step2").classList.remove("hidden");
+
+    let div=document.getElementById("msgInputs");
+    div.innerHTML="";
+
+    Object.keys(sys.p).forEach(id=>{
+        div.innerHTML+=`
+        <div class="process">
+            ${id} envia em:
+            <input type="time" id="m_${id}">
+        </div>`;
+    });
+}
+
+function run(){
+    let out=document.getElementById("output");
+
+    let html="<h3>Sincronização</h3><div class='log'>";
+    html+=sys.sync()+"</div>";
+
+    Object.keys(sys.p).forEach(id=>{
+        sys.send(id,document.getElementById("m_"+id).value);
+    });
+
+    let real=[...sys.q].sort((a,b)=>a.real-b.real);
+    let log=[...sys.q].sort((a,b)=>a.log-b.log);
+
+    html+=`<h3>Tempo Real</h3><div class="log">`;
+    real.forEach(m=>{
+        html+=`[${sys.fmt(m.real)}] ${m.s} → ${m.r} (${m.txt})<br>`;
+    });
+    html+=`</div>`;
+
+    html+=`<h3>Clock Lógico</h3><div class="log">`;
+    log.forEach(m=>{
+        html+=`[${sys.fmt(m.log)}] ${m.s} → ${m.r} (${m.txt})<br>`;
+    });
+    html+=`</div>`;
+
+    out.innerHTML=html;
+
+    document.getElementById("step2").classList.add("hidden");
+    document.getElementById("step3").classList.remove("hidden");
+}
+</script>
+
+</body>
+</html>
