@@ -1,167 +1,158 @@
+
 class Process {
-    constructor(id) {
+    constructor(id, t){
         this.id = id;
-        // Gera um horário aleatório [horas, minutos]
-        this.clock = [Math.floor(Math.random() * 24), Math.floor(Math.random() * 60)];
+        this.real = this.parse(t);
         this.adjust = 0;
     }
-
-    getClockInMinutes() {
-        return this.clock[0] * 60 + this.clock[1];
+    parse(t){ 
+        let [h, m] = t.split(":"); 
+        return (+h * 60 + +m) % 1440;
     }
-
-    getLogicalTime() {
-        let total = this.getClockInMinutes() + this.adjust;
-        while (total < 0) total += 1440;
-        return total % 1440;
+    tick(m){ 
+        this.real = (this.real + m) % 1440;
     }
-
-    getFormattedTime(minutesValue) {
-        const h = Math.floor(minutesValue / 60) % 24;
-        const m = Math.floor(minutesValue % 60);
-        return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-    }
-
-    tick() {
-        this.clock[1]++;
-        if (this.clock[1] > 59) {
-            this.clock[1] = 0;
-            this.clock[0] = (this.clock[0] + 1) % 24;
-        }
+    logical(){ 
+        return this.real + this.adjust;
     }
 }
 
 class System {
-    constructor() {
-        this.processes = {};
-        this.serverClock = [10, 0]; // Servidor começa às 10:00
-        this.idCounter = 1;
+    constructor(t){
+        this.server = this.parse(t);
+        this.p = {};
+        this.q = [];
+    }
+    parse(t){ 
+        let [h, m] = t.split(":"); 
+        return (+h * 60 + +m) % 1440;
+    }
+    fmt(m){ 
+        return `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(Math.floor(m % 60)).padStart(2, '0')}`;
     }
 
-    getServerMinutes() {
-        return this.serverClock[0] * 60 + this.serverClock[1];
+    add(p){ 
+        this.p[p.id] = p;
     }
 
-    addProcess() {
-        const id = `P${this.idCounter++}`;
-        const p = new Process(id);
-        this.processes[id] = p;
-        log(`Processo ${id} adicionado com relógio real: ${p.getFormattedTime(p.getClockInMinutes())}`);
-        updateUI();
-    }
+    sync(){
+        let all = [this.server, ...Object.values(this.p).map(x => x.real)];
+        let avg = all.reduce((a, b) => a + b, 0) / all.length;
 
-    syncProcesses() {
-        const processList = Object.values(this.processes);
-        if (processList.length === 0) {
-            log("Nenhum processo para sincronizar.");
-            return;
-        }
+        let html = `<div class="badge">Clock Lógico: ${this.fmt(avg)}</div><br>`;
+        html += `Servidor ajuste: ${avg - this.server >= 0 ? "+" : "-"}${Math.abs((avg - this.server).toFixed(1))} min<br>`;
+        this.server = avg;
 
-        const serverMins = this.getServerMinutes();
-        const allTimes = [serverMins, ...processList.map(p => p.getClockInMinutes())];
-        
-        // Algoritmo de Berkeley: Calcula a média de todos os relógios
-        const average = allTimes.reduce((a, b) => a + b, 0) / allTimes.length;
-        
-        log(`Iniciando sincronização... Média calculada: ${this.getFormattedTime(average)}`, 'log-sync');
-
-        // Aplica o ajuste (Média - Horário Real) para cada processo
-        processList.forEach(p => {
-            p.adjust = average - p.getClockInMinutes();
+        Object.values(this.p).forEach(p => {
+            p.adjust = avg - p.real;
+            html += `${p.id} → Real: ${this.fmt(p.real)} | Ajuste: ${avg - this.server >= 0 ? "+" : "-"}${Math.abs(p.adjust.toFixed(1))} min<br>`;
         });
 
-        // O próprio servidor se ajusta
-        const serverAdjust = average - serverMins;
-        this.serverClock = [Math.floor(average / 60) % 24, Math.floor(average % 60)];
-
-        log(`Servidor e processos ajustados com sucesso.`, 'log-sync');
-        updateUI();
+        return html;
     }
 
-    getFormattedTime(totalMinutes) {
-        let t = Math.floor(totalMinutes);
-        while (t < 0) t += 1440;
-        const h = Math.floor(t / 60) % 24;
-        const m = t % 60;
-        return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    adv(m){
+        this.server = (this.server + m) % 1440;
+        Object.values(this.p).forEach(p => p.tick(m));
     }
 
-    advanceAll() {
-        // Incrementa o tempo real de todos (incluindo servidor)
-        this.serverClock[1]++;
-        if (this.serverClock[1] > 59) {
-            this.serverClock[1] = 0;
-            this.serverClock[0] = (this.serverClock[0] + 1) % 24;
-        }
-        Object.values(this.processes).forEach(p => p.tick());
-    }
+    send(id, t){
+        let s = this.p[id];
+        let target = this.parse(t);
+        let diff = (target - s.real + 1440) % 1440;
 
-    sendMessage() {
-        const ids = Object.keys(this.processes);
-        if (ids.length < 1) return log("Adicione processos primeiro!");
+        this.adv(diff);
 
-        const senderId = ids[Math.floor(Math.random() * ids.length)];
-        const sender = this.processes[senderId];
+        let ids = Object.keys(this.p).filter(x => x != id);
+        let r = ids[Math.floor(Math.random() * ids.length)] || "Ninguém";
+        let txt = "Msg-" + Math.random().toString(36).slice(2, 5);
 
-        this.advanceAll(); // Simula passagem de tempo no envio
-        log(`Mensagem enviada por ${senderId} no clock lógico ${sender.getFormattedTime(sender.getLogicalTime())}`, 'log-msg');
-        updateUI();
+        this.q.push({
+            s: id,
+            r: r,
+            real: s.real,
+            log: s.logical(),
+            txt: txt
+        });
     }
 }
 
-// --- Funções Globais e Integração ---
+let sys;
 
-const system = new System();
+function createProcesses(){
+    let t = document.getElementById("serverTime").value;
+    let n = +document.getElementById("numProcesses").value;
 
-function log(text, type = '') {
-    const terminal = document.getElementById('terminal');
-    const entry = document.createElement('div');
-    entry.className = `log-entry ${type}`;
-    const now = new Date();
-    const timePrefix = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}:${now.getSeconds().toString().padStart(2,'0')}`;
-    entry.textContent = `[${timePrefix}] ${text}`;
-    terminal.appendChild(entry);
-    terminal.scrollTop = terminal.scrollHeight;
+    if(!t || !n) return alert("Preencha todos os campos!");
+
+    document.getElementById("serverTime").disabled = true;
+
+    let div = document.getElementById("procInputs");
+    div.innerHTML = "";
+
+    for(let i = 1; i <= n; i++){
+        div.innerHTML += `
+        <div class="process">
+            P${i}
+            <input type="time" id="p${i}" value="12:00">
+        </div>`;
+    }
+
+    div.innerHTML += `<button onclick="toStep2()">Avançar →</button>`;
 }
 
-function updateUI() {
-    const dashboard = document.getElementById('dashboard');
-    dashboard.innerHTML = '';
+function toStep2(){
+    let t = document.getElementById("serverTime").value;
+    sys = new System(t);
 
-    // Renderiza o Servidor (Coordenador)
-    const serverCard = document.createElement('div');
-    serverCard.className = 'process-card server-node';
-    serverCard.innerHTML = `
-        <h3>Servidor (Mestre)</h3>
-        <div class="clock-display">${system.getFormattedTime(system.getServerMinutes())}</div>
-        <div class="adjust-label">Coordenador</div>
-    `;
-    dashboard.appendChild(serverCard);
+    let inputs = document.querySelectorAll("#procInputs input");
+    inputs.forEach((inp, i) => {
+        sys.add(new Process("P" + (i + 1), inp.value));
+    });
 
-    // Renderiza cada Processo
-    Object.values(system.processes).forEach(p => {
-        const card = document.createElement('div');
-        card.className = 'process-card';
-        card.innerHTML = `
-            <h3>Processo ${p.id}</h3>
-            <div class="clock-display">${p.getFormattedTime(p.getLogicalTime())}</div>
-            <div class="adjust-label">Ajuste: ${p.adjust > 0 ? '+' : ''}${p.adjust.toFixed(1)} min</div>
-            <div style="font-size: 0.7rem; color: #999; margin-top:5px;">
-                Real: ${p.getFormattedTime(p.getClockInMinutes())}
-            </div>
-        `;
-        dashboard.appendChild(card);
+    document.getElementById("step1").classList.add("hidden");
+    document.getElementById("step2").classList.remove("hidden");
+
+    let div = document.getElementById("msgInputs");
+    div.innerHTML = "";
+
+    Object.keys(sys.p).forEach(id => {
+        div.innerHTML += `
+        <div class="process">
+            ${id} envia em:
+            <input type="time" id="m_${id}" value="12:30">
+        </div>`;
     });
 }
 
-function addNewProcess() {
-    system.addProcess();
-}
+function run(){
+    let out = document.getElementById("output");
 
-function syncAll() {
-    system.syncProcesses();
-}
+    let html = "<h3>Sincronização (Berkeley)</h3><div class='log'>";
+    html += sys.sync() + "</div>";
 
-function sendRandomMessage() {
-    system.sendMessage();
+    Object.keys(sys.p).forEach(id => {
+        let timeVal = document.getElementById("m_" + id).value;
+        if(timeVal) sys.send(id, timeVal);
+    });
+
+    let realSorted = [...sys.q].sort((a, b) => a.real - b.real);
+    let logSorted = [...sys.q].sort((a, b) => a.log - b.log);
+
+    html += `<h3>Eventos em Tempo Real</h3><div class="log">`;
+    realSorted.forEach((m, idx) => {
+        html += `${idx + 1}º lugar → ${m.s} [${sys.fmt(m.real)}]<br>`;
+    });
+    html += `</div>`;
+
+    html += `<h3>Eventos no Clock Lógico</h3><div class="log">`;
+    logSorted.forEach((m, idx) => {
+        html += `${idx + 1}º lugar → ${m.s} [${sys.fmt(m.log)}]<br>`;
+    });
+    html += `</div>`;
+
+    out.innerHTML = html;
+
+    document.getElementById("step2").classList.add("hidden");
+    document.getElementById("step3").classList.remove("hidden");
 }
